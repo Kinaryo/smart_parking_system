@@ -88,7 +88,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/profile/update', [ProfileController::class, 'update'])->name('profile.update');
     Route::post('/profile/change-password', [ProfileController::class, 'changePassword'])->name('profile.change-password');
    
-    Route::get('nota/{id}', [CetakNotaController::class, 'show'])->name('cetakNota');
+    Route::get('/nota/{id}', [CetakNotaController::class, 'show'])->name('cetakNota');
    
    
     /*

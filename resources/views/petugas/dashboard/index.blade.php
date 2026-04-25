@@ -9,7 +9,7 @@
                 <div class="card border-0 shadow-sm rounded overflow-hidden">
                     <div class="card-header bg-primary-subtle py-3">
                         <h4 class="fw-bold mb-1 text-dark">Monitoring Parkir</h4>
-                        <p class="text-muted small mb-0">Sistem Parkir Realtime</p>
+                        <p class="text-muted small mb-0">Sistem Parkir Realtime (MQTT + Auto-Polling AJAX)</p>
                     </div>
                 </div>
             </div>
@@ -18,12 +18,9 @@
                 <div class="card border-0 shadow-sm rounded overflow-hidden">
                     <div class="card-body p-0">
                         <div class="d-flex justify-content-between align-items-center py-3 px-3">
-                            {{-- KIRI --}}
                             <div class="ms-3 flex-grow-1">
                                 <div class="text-muted small">QR validasi gate masuk.</div>
-                                <div class="fw-semibold text-dark mb-2">
-                                    
-                                </div>
+                                <div class="fw-semibold text-dark mb-2"></div>
 
                                 <a href="{{ url('/qr-show') }}" target="_blank"
                                     class="small text-primary text-decoration-none d-block mb-1">
@@ -68,7 +65,7 @@
         <div id="kantung-wrapper" class="mb-2">
             <div class="text-center py-5">
                 <div class="spinner-border text-primary"></div>
-                <p class="text-muted mt-2">Menghubungkan ke sensor...</p>
+                <p class="text-muted mt-2">Menghubungkan ke MQTT & Sinkronisasi Data...</p>
             </div>
         </div>
 
@@ -104,32 +101,125 @@
     </div>
 
     @include('petugas.dashboard.partials.modal-dashboard-transaksi')
-
 @endsection
 
 @push('scripts')
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 
     <script>
         const SLOT_URL = "{{ route('petugas.slots') }}";
         const QR_URL = "{{ url('/ajax-qr-show') }}";
+
         let localAreas = [];
         let activeTransactions = [];
         let selectedTransaksi = null;
+        let isFetching = false;
+        let processingSlots = new Set();
 
-        async function loadInitialData() {
+        async function fetchJSON(url) {
+            const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`, {
+                cache: "no-store"
+            });
+            return await res.json();
+        }
+
+        async function syncDatabase() {
+            if (isFetching) return;
+            isFetching = true;
             try {
-                const res = await fetch(SLOT_URL);
-                const data = await res.json();
-
+                const data = await fetchJSON(SLOT_URL);
                 localAreas = data.areas || [];
                 activeTransactions = data.active_transactions || [];
-
+                processingSlots.clear();
                 renderSlots();
                 renderTable();
             } catch (e) {
-                console.error("Gagal sinkronisasi data", e);
+                console.error("AJAX Error", e);
+            } finally {
+                isFetching = false;
             }
+        }
+
+        function listenMQTT() {
+            const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
+            const options = {
+                clientId: 'web_dashboard_' + Math.random().toString(16).substr(2, 8),
+                clean: true,
+                connectTimeout: 5000,
+            };
+
+            const client = mqtt.connect(brokerUrl, options);
+
+            client.on('connect', () => {
+                client.subscribe('smartparking/univ123/slots');
+            });
+
+            client.on('message', (topic, message) => {
+                try {
+                    const payload = JSON.parse(message.toString());
+                    updateSlotsFromMQTT(payload);
+                } catch (e) { }
+            });
+        }
+
+        function updateSlotsFromMQTT(mqttData) {
+            let changed = false;
+
+            if (!mqttData || typeof mqttData !== 'object') return;
+
+            const slots = [];
+
+            for (const [key, value] of Object.entries(mqttData)) {
+                if (key === 'command' || key === 'time') continue;
+
+                if (value && typeof value === 'object') {
+                    slots.push({
+                        kode: key.replace('slot_', '').toUpperCase(),
+                        status: normalizeStatus(value.status),
+                        jenis: (value.jenis || 'mobil').toLowerCase()
+                    });
+                }
+            }
+
+            if (slots.length === 0) return;
+
+            localAreas.forEach(area => {
+                if (!Array.isArray(area.slot)) return;
+
+                area.slot.forEach(s => {
+                    const incoming = slots.find(x => x.kode === s.kode);
+
+                    if (incoming) {
+                        if (s.status !== incoming.status || s.jenis !== incoming.jenis) {
+                            s.status = incoming.status;
+                            s.jenis = incoming.jenis;
+                            changed = true;
+                        }
+                    }
+                });
+            });
+
+            if (changed) {
+                renderSlots();
+
+                clearTimeout(window._slotSync);
+                window._slotSync = setTimeout(() => {
+                    syncDatabase();
+                }, 1000);
+            }
+        } async function loadQR() {
+            try {
+                const data = await fetchJSON(QR_URL);
+                if (data.success) {
+                    const container = document.getElementById("qr-container");
+                    const textDisplay = document.getElementById("qr-code-text");
+                    if (textDisplay.innerText !== (data.kode ?? '-')) {
+                        container.innerHTML = data.svg;
+                        textDisplay.innerText = data.kode ?? '-';
+                    }
+                }
+            } catch (e) { }
         }
 
         function handleSearch() {
@@ -137,13 +227,12 @@
             renderTable();
         }
 
-
         function renderSlots() {
             const wrapper = document.getElementById('kantung-wrapper');
             const search = document.getElementById('searchPlat').value.toUpperCase();
 
             if (localAreas.length === 0) {
-                wrapper.innerHTML = `<div class="text-center text-muted py-5">Tidak ada sensor aktif.</div>`;
+                wrapper.innerHTML = `<div class="text-center text-muted py-5">Memuat data...</div>`;
                 return;
             }
 
@@ -151,20 +240,26 @@
             localAreas.forEach(k => {
                 let slotHtml = '';
                 k.slot.forEach(s => {
+                    const nStatus = normalizeStatus(s.status);
+
                     const platNomor = (s.plat ?? '').toUpperCase();
                     const kodeSlot = (s.kode ?? '').toUpperCase();
-
                     if (search && !platNomor.includes(search) && !kodeSlot.includes(search)) return;
 
-                    const statusClass = s.status === 'terisi' ? 'terisi' : 'kosong';
+                    const statusClass = nStatus === 'terisi' ? 'terisi' : 'kosong';
                     const icon = s.jenis === 'motor' ? 'motorcycle' : 'directions_car';
+                    const isProcessing = processingSlots.has(s.kode);
+
+                    let displayText = nStatus === 'terisi'
+                        ? `<strong class="d-block" style="font-size:0.75rem">${platNomor || 'TERISI'}</strong>`
+                        : `<span class="small" style="font-size:0.7rem">KOSONG</span>`;
 
                     slotHtml += `
-                                <div class="slot ${statusClass}" style="cursor:default">
+                                <div class="slot ${statusClass} ${isProcessing ? 'opacity-50 border-primary' : ''}">
                                     <span class="kode-slot">${s.kode}</span>
                                     <span class="material-icons">${icon}</span>
                                     <div class="plat-info mt-1">
-                                        ${s.status === 'terisi' ? `<strong class="d-block" style="font-size:0.8rem">TERISI</strong>` : `<span class="small">KOSONG</span>`}
+                                        ${isProcessing ? `<div class="spinner-border spinner-border-sm text-primary"></div>` : displayText}
                                     </div>
                                 </div>`;
                 });
@@ -182,7 +277,6 @@
             });
             wrapper.innerHTML = html;
         }
-
         function renderTable() {
             const tbody = document.getElementById('table-transactions-body');
             const search = document.getElementById('searchPlat').value.toUpperCase();
@@ -195,19 +289,18 @@
             let html = '';
             activeTransactions.forEach(t => {
                 if (search && !t.plat.toUpperCase().includes(search)) return;
-
                 html += `
-                            <tr>
-                                <td class="ps-3 fw-bold">${t.plat}</td>
-                                <td><span class="badge bg-secondary-subtle text-dark text-uppercase py-2 px-3">${t.jenis}</span></td>
-                                <td>${t.masuk}</td>
-                                <td>${t.total_waktu} Menit</td>
-                                <td class="text-center">
-                                    <button class="btn btn-sm btn-primary px-3" onclick="openModal(${t.id})">
-                                        <i class="bi bi-box-arrow-right me-1"></i> Keluar
-                                    </button>
-                                </td>
-                            </tr>`;
+                                            <tr>
+                                                <td class="ps-3 fw-bold">${t.plat}</td>
+                                                <td><span class="badge bg-secondary-subtle text-dark text-uppercase py-2 px-3">${t.jenis}</span></td>
+                                                <td>${t.masuk}</td>
+                                                <td><span class="text-primary fw-bold">${t.total_waktu}</span> mnt</td>
+                                                <td class="text-center">
+                                                    <button class="btn btn-sm btn-primary px-3 rounded-pill" onclick="openModal(${t.id})">
+                                                        <i class="bi bi-box-arrow-right me-1"></i> Keluar
+                                                    </button>
+                                                </td>
+                                            </tr>`;
             });
             tbody.innerHTML = html;
         }
@@ -217,7 +310,6 @@
             if (!trx) return;
 
             selectedTransaksi = trx;
-
             document.getElementById('m_plat').innerText = trx.plat;
             document.getElementById('m_jenis').innerText = trx.jenis;
             document.getElementById('m_masuk').innerText = formatTime(trx.waktu_masuk);
@@ -227,194 +319,121 @@
 
             const masuk = new Date(trx.waktu_masuk);
             const sekarang = new Date();
-            const selisihMs = sekarang - masuk;
-            const totalMenit = Math.max(1, Math.floor(selisihMs / 60000));
-
+            const totalMenit = Math.max(1, Math.floor((sekarang - masuk) / 60000));
             document.getElementById('m_durasi').innerText = formatDurasiTeks(totalMenit);
 
             const jumlahJam = Math.ceil(totalMenit / 60) || 1;
-            const totalBayar = jumlahJam * tarifPerJam;
+            document.getElementById('m_total').innerText = 'Rp ' + formatRupiah(jumlahJam * tarifPerJam);
 
-            document.getElementById('m_total').innerText = 'Rp ' + formatRupiah(totalBayar);
-
-            const myModal = new bootstrap.Modal(document.getElementById('modalTransaksi'));
-            myModal.show();
+            new bootstrap.Modal(document.getElementById('modalTransaksi')).show();
         }
 
         async function keluarkanKendaraan() {
             if (!selectedTransaksi) return;
-
             const confirm = await Swal.fire({
                 title: 'Konfirmasi Keluar',
                 text: `Proses pembayaran untuk ${selectedTransaksi.plat}?`,
                 icon: 'warning',
                 showCancelButton: true,
-                confirmButtonColor: '#3085d6',
-                cancelButtonColor: '#d33',
+                confirmButtonColor: '#0061ff',
                 confirmButtonText: 'Ya, Selesaikan'
             });
 
             if (!confirm.isConfirmed) return;
 
-            Swal.fire({
-                title: 'Memproses Pembayaran...',
-                text: 'Mohon tunggu sebentar, sedang menyiapkan nota.',
-                allowOutsideClick: false,
-                allowEscapeKey: false,
-                showConfirmButton: false,
-                didOpen: () => {
-                    Swal.showLoading();
-                }
-            });
+            Swal.fire({ title: 'Memproses...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
 
             try {
                 const res = await fetch(`/petugas/keluar/${selectedTransaksi.id}`, {
                     method: 'POST',
-                    headers: {
-                        'X-CSRF-TOKEN': '{{ csrf_token() }}',
-                        'Content-Type': 'application/json'
-                    }
+                    headers: { 'X-CSRF-TOKEN': '{{ csrf_token() }}', 'Content-Type': 'application/json' }
                 });
 
                 const result = await res.json();
-
                 if (result.success) {
-                    const modalEl = document.getElementById('modalTransaksi');
-                    const modalInstance = bootstrap.Modal.getInstance(modalEl);
-                    if (modalInstance) modalInstance.hide();
-
+                    bootstrap.Modal.getInstance(document.getElementById('modalTransaksi')).hide();
+                    await Swal.fire({ icon: 'success', title: 'Berhasil', timer: 1500, showConfirmButton: false });
                     printNota(result.data, result.settings);
-
-                    Swal.fire({
-                        icon: 'success',
-                        title: 'Transaksi Berhasil',
-                        text: 'Nota telah dicetak.',
-                        timer: 2000,
-                        showConfirmButton: false
-                    });
-
-                    loadInitialData();
+                    syncDatabase();
                 } else {
-                    Swal.fire('Gagal', result.message || 'Terjadi kesalahan sistem.', 'error');
+                    Swal.fire('Gagal', result.message, 'error');
                 }
             } catch (e) {
-                console.error(e);
-                Swal.fire('Error', 'Gagal menghubungkan ke server.', 'error');
+                Swal.fire('Error', 'Gagal koneksi server', 'error');
             }
         }
+
         function printNota(data, settings = {}) {
             const totalMenit = parseInt(data.total_waktu) || 0;
             const durasiStr = formatDurasiTeks(totalMenit);
-
             const printWindow = window.open('', '_blank', 'width=400,height=600');
+            if (!printWindow) return;
+
             const html = `
-            <html>
-            <head>
-                <style>
-                    @page { size: 58mm auto; margin: 0; }
-                    body { 
-                        font-family: 'Courier New', monospace; 
-                        width: 48mm; 
-                        margin: 0 auto; 
-                        padding: 10px 5px; 
-                        font-size: 11px; 
-                        line-height: 1.2;
-                    }
-                    .center { text-align: center; }
-                    .line { border-top: 1px dashed #000; margin: 5px 0; }
-                    .row { display: flex; justify-content: space-between; }
-                    .bold { font-weight: bold; }
-                    .address { font-size: 9px; margin-bottom: 2px; }
-                </style>
-            </head>
-            <body>
-                <div class="center bold">${settings.app_name.toUpperCase()}</div>
-                <div class="center bold">${settings.lokasi_parkir}</div>
-                <div class="center address">${settings.alamat}</div>
-                <div class="center address">Telp: ${settings.kontak}</div>
-
-                <div class="line"></div>
-                <div class="row"><span>Plat</span> <span class="bold">${data.plat_nomor}</span></div>
-                <div class="row"><span>Masuk</span> <span>${formatTime(data.waktu_masuk)}</span></div>
-                <div class="row"><span>Keluar</span> <span>${formatTime(data.waktu_keluar)}</span></div>
-                <div class="row"><span>Durasi</span> <span>${durasiStr}</span></div>
-                <div class="line"></div>
-                <div class="row bold" style="font-size: 13px;">
-                    <span>TOTAL</span> <span>Rp ${formatRupiah(data.total_bayar)}</span>
-                </div>
-                <div class="line"></div>
-                <div class="center">Terima kasih atas kunjungan Anda</div>
-                <div class="center">Simpan nota ini sebagai bukti pembayaran</div>
-
-                <script>
-                    window.onload = function() { 
-                        window.print(); 
-                        setTimeout(() => window.close(), 500); 
-                    }
-                <\/script>
-            </body>
-            </html>`;
-
+                                        <html>
+                                        <head>
+                                            <style>
+                                                @page { size: 58mm auto; margin: 0; }
+                                                body { font-family: 'Courier New', monospace; width: 48mm; margin: 0 auto; padding: 10px 0; font-size: 11px; line-height: 1.2; }
+                                                .center { text-align: center; }
+                                                .bold { font-weight: bold; }
+                                                .line { border-top: 1px dashed #000; margin: 5px 0; }
+                                                .flex { display: flex; justify-content: space-between; }
+                                                .header-title { font-size: 14px; margin-bottom: 2px; }
+                                            </style>
+                                        </head>
+                                        <body>
+                                            <div class="center bold header-title">${(settings.app_name || 'SMART PARKING').toUpperCase()}</div>
+                                            <div class="center">${settings.lokasi_parkir || ''}</div>
+                                            <div class="center">${settings.alamat || ''}</div>
+                                            <div class="center">${settings.kontak || ''}</div>
+                                            <div class="line"></div>
+                                            <div class="flex"><span>Tgl Keluar:</span> <span>${data.waktu_keluar}</span></div>
+                                            <div class="line"></div>
+                                            <div class="bold" style="font-size:13px">PLAT: ${data.plat_nomor}</div>
+                                            <div class="flex"><span>Masuk:</span> <span>${formatTime(data.waktu_masuk)}</span></div>
+                                            <div class="flex"><span>Keluar:</span> <span>${formatTime(data.waktu_keluar)}</span></div>
+                                            <div class="flex"><span>Durasi:</span> <span>${durasiStr}</span></div>
+                                            <div class="line"></div>
+                                            <div class="flex bold" style="font-size:13px"><span>TOTAL:</span> <span>Rp ${formatRupiah(data.total_bayar)}</span></div>
+                                            <div class="line"></div>
+                                            <div class="center" style="margin-top:10px">TERIMA KASIH ATAS KUNJUNGAN ANDA</div>
+                                            <div class="center">SIMPAN STRUK SEBAGAI BUKTI</div>
+                                            <script>window.onload = function() { window.print(); setTimeout(() => { window.close(); }, 500); }<\/script>
+                                        </body>
+                                        </html>`;
             printWindow.document.write(html);
             printWindow.document.close();
         }
+
         function formatTime(t) {
             if (!t) return '-';
             const date = new Date(t);
-            return date.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit' }) + ' ' +
-                date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+            return date.toLocaleDateString('id-ID') + ' ' + date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
         }
-
         function formatRupiah(n) { return new Intl.NumberFormat('id-ID').format(n); }
+        function formatDurasiTeks(m) { return `${Math.floor(m / 60)}j ${m % 60}m`; }
+        function normalizeStatus(status) {
+            if (!status) return 'kosong';
 
-        function formatDurasiTeks(totalMenit) {
-            const jam = Math.floor(totalMenit / 60);
-            const menit = totalMenit % 60;
-            return `${jam}j ${menit}m`;
-        }
+            status = status.toLowerCase();
 
-        function listenRealtime() {
-            if (typeof window.Echo === 'undefined') return;
-            window.Echo.channel('parking-channel')
-                .listen('.SlotUpdated', (e) => {
-                    if (e.slots && e.slots.slots) {
-                        updateSlotsDirectly(e.slots.slots);
-                    } else {
-                        loadInitialData();
-                    }
-                });
-        }
-
-        function updateSlotsDirectly(mqttData) {
-            let processed = [];
-            for (const [kode, data] of Object.entries(mqttData)) {
-                processed.push({
-                    kode: kode,
-                    status: data.status,
-                    jenis: data.jenis || 'mobil',
-                    plat: data.status === 'terisi' ? 'OCCUPIED' : '-',
-                });
+            if (status === 'occupied' || status === 'terisi' || status === '1') {
+                return 'terisi';
             }
-            localAreas = [{ nama: 'AREA PARKIR', kapasitas: processed.length, slot: processed }];
-            renderSlots();
-        }
 
-        async function loadQR() {
-            try {
-                const res = await fetch(QR_URL);
-                const data = await res.json();
-                if (data.success) {
-                    document.getElementById("qr-container").innerHTML = data.svg;
-                    document.getElementById("qr-code-text").innerText = data.kode ?? '-';
-                }
-            } catch (e) { console.error("Gagal load QR", e); }
-        }
+            if (status === 'empty' || status === 'kosong' || status === '0') {
+                return 'kosong';
+            }
 
+            return status;
+        }
         document.addEventListener('DOMContentLoaded', () => {
-            loadInitialData();
+            syncDatabase();
             loadQR();
-            listenRealtime();
-            setInterval(loadInitialData, 30000);
+            listenMQTT();
+            setInterval(syncDatabase, 4000);
+            setInterval(loadQR, 5000);
         });
     </script>
 @endpush

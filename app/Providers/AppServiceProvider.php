@@ -18,10 +18,11 @@ class AppServiceProvider extends ServiceProvider
     /**
      * Bootstrap any application services.
      */
+
+
     public function boot(): void
     {
-        // Deteksi jika menggunakan ngrok atau environment bukan local
-        if (str_contains(request()->header('host'), 'ngrok-free.app') || config('app.env') !== 'local') {
+        if (app()->environment('production')) {
             URL::forceScheme('https');
         }
     }

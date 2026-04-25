@@ -8,17 +8,15 @@ use App\Models\Gate;
 use App\Models\Setting;
 use App\Models\QRParkir;
 use App\Services\MqttService;
-use App\Events\QRUpdated;
+// Event Laravel Broadcast dihapus karena sudah tidak digunakan
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use Carbon\Carbon;
-use Illuminate\Support\Str;
 
 class PetugasDashboardController extends Controller
 {
-
     public function index()
     {
         return view('petugas.dashboard.index');
@@ -28,15 +26,12 @@ class PetugasDashboardController extends Controller
     {
         try {
             $slotsFromEsp = Cache::get('esp_slots_status', []);
-
-            
             $transaksiAktif = ParkirTransaksi::with('kendaraan')
                 ->where('status', 'aktif')
                 ->orderByDesc('waktu_masuk')
                 ->get();
 
             $processedSlots = [];
-
             foreach ($slotsFromEsp as $kode => $dataEsp) {
                 $statusFisik = $dataEsp['status'] ?? 'kosong';
                 $processedSlots[] = [
@@ -73,31 +68,22 @@ class PetugasDashboardController extends Controller
                 'active_transactions' => $activeTrxData
             ]);
         } catch (\Exception $e) {
-            Log::error("Dashboard Slots Error: " . $e->getMessage());
+            Log::error("Petugas Dashboard Slots Error: " . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal mengambil data dashboard'
+                'message' => 'Gagal mengambil data'
             ], 500);
         }
     }
 
     public function keluar($id)
     {
-        Log::info("--- [START] PROSES KELUAR ID: $id ---");
-
         DB::beginTransaction();
         try {
             $trx = ParkirTransaksi::with(['kendaraan', 'qrParkir'])->findOrFail($id);
 
-
             $totalBayar = $trx->hitungTotalBayar();
             $durasiMenit = (int) $trx->hitungDurasi();
-
-            Log::info("Transaksi Keluar: " . ($trx->kendaraan->plat_nomor ?? 'N/A'), [
-                'total_bayar' => $totalBayar,
-                'durasi_menit' => $durasiMenit
-            ]);
-
             $gateKeluar = Gate::where('tipe_gate', 'keluar')->first();
 
             $trx->update([
@@ -114,7 +100,7 @@ class PetugasDashboardController extends Controller
                     'status' => 'tersedia',
                     'aktif'  => true
                 ]);
-                Log::info("QR Code [{$trx->qrParkir->kode}] di-reset ke tersedia.");
+                // Broadcast QRUpdated dihapus
             }
 
             $mqttPayload = [
@@ -131,24 +117,13 @@ class PetugasDashboardController extends Controller
 
             $mqttSent = MqttService::publish("smartparking/univ123/commands", $mqttPayload);
 
-
-            broadcast(new \App\Events\TransaksiSelesai($trx));
-
-
-            if ($trx->qrParkir) {
-                broadcast(new \App\Events\QRUpdated([
-                    'kode'   => $trx->qrParkir->kode,
-                    'status' => 'tersedia',
-                    'time'   => now()->format('H:i:s')
-                ]));
-            }
+            // Broadcast TransaksiSelesai dihapus karena FE sudah pakai polling syncDatabase()
 
             DB::commit();
 
             return response()->json([
                 'success'     => true,
-                'message'     => $mqttSent ? 'Kendaraan berhasil keluar.' : 'Data tersimpan, MQTT gagal.',
-                'mqtt_status' => $mqttSent,
+                'message'     => $mqttSent ? 'Berhasil.' : 'Data tersimpan, MQTT gagal.',
                 'data'        => [
                     'plat_nomor'   => $trx->kendaraan->plat_nomor,
                     'total_bayar'  => (int) $totalBayar,
@@ -165,10 +140,10 @@ class PetugasDashboardController extends Controller
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error("ERROR PROSES KELUAR: " . $e->getMessage());
+            Log::error("ERROR PROSES KELUAR PETUGAS: " . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal memproses data keluar: ' . $e->getMessage()
+                'message' => 'Gagal: ' . $e->getMessage()
             ], 500);
         }
     }
