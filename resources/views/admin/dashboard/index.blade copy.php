@@ -9,7 +9,7 @@
                 <div class="card border-0 shadow-sm rounded overflow-hidden">
                     <div class="card-header bg-primary-subtle py-3">
                         <h4 class="fw-bold mb-1 text-dark">Monitoring Parkir</h4>
-                        <p class="text-muted small mb-0">Sistem Parkir Realtime (Direct MQTT Mode)</p>
+                        <p class="text-muted small mb-0">Sistem Parkir Realtime</p>
                     </div>
                 </div>
             </div>
@@ -65,7 +65,7 @@
         <div id="kantung-wrapper" class="mb-2">
             <div class="text-center py-5">
                 <div class="spinner-border text-primary"></div>
-                <p class="text-muted mt-2">Menghubungkan ke Broker MQTT...</p>
+                <p class="text-muted mt-2">Menghubungkan ke sensor...</p>
             </div>
         </div>
 
@@ -105,8 +105,6 @@
 
 @push('scripts')
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-    {{-- Library MQTT.js untuk koneksi langsung --}}
-    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 
     <script>
         const SLOT_URL = "{{ route('admin.slots') }}";
@@ -136,14 +134,17 @@
         async function loadInitialData() {
             if (isLoading) return;
             isLoading = true;
+            console.log("[POLLING] Request data slot:", new Date().toLocaleTimeString());
+
             try {
                 const data = await fetchJSON(SLOT_URL);
+                console.log("[POLLING] Data masuk:", data);
                 localAreas = data.areas || [];
                 activeTransactions = data.active_transactions || [];
                 renderSlots();
                 renderTable();
             } catch (e) {
-                console.error("Gagal sinkronisasi data database", e);
+                console.error("Gagal sinkronisasi data", e);
             } finally {
                 isLoading = false;
             }
@@ -159,7 +160,7 @@
             const search = document.getElementById('searchPlat').value.toUpperCase();
 
             if (localAreas.length === 0) {
-                wrapper.innerHTML = `<div class="text-center text-muted py-5">Menunggu data sensor...</div>`;
+                wrapper.innerHTML = `<div class="text-center text-muted py-5">Tidak ada sensor aktif.</div>`;
                 return;
             }
 
@@ -180,8 +181,8 @@
                             <span class="material-icons">${icon}</span>
                             <div class="plat-info mt-1">
                                 ${s.status === 'terisi'
-                                    ? `<strong class="d-block" style="font-size:0.8rem">TERISI</strong>`
-                                    : `<span class="small">KOSONG</span>`}
+                            ? `<strong class="d-block" style="font-size:0.8rem">TERISI</strong>`
+                            : `<span class="small">KOSONG</span>`}
                             </div>
                         </div>`;
                 });
@@ -228,42 +229,169 @@
             tbody.innerHTML = html;
         }
 
-        // MQTT Direct Logic
-        function listenRealtime() {
-            // Menggunakan WSS port 8884 untuk HiveMQ Public Broker
-            const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt'; 
-            const options = {
-                clientId: 'web_dashboard_' + Math.random().toString(16).substr(2, 8),
-                clean: true,
-                connectTimeout: 5000,
-            };
+        function openModal(id) {
+            const trx = activeTransactions.find(t => t.id === id);
+            if (!trx) return;
 
-            console.log("[MQTT] Connecting to HiveMQ via WebSockets...");
-            const client = mqtt.connect(brokerUrl, options);
+            selectedTransaksi = trx;
+            document.getElementById('m_plat').innerText = trx.plat;
+            document.getElementById('m_jenis').innerText = trx.jenis;
+            document.getElementById('m_masuk').innerText = formatTime(trx.waktu_masuk);
 
-            client.on('connect', () => {
-                console.log("[MQTT] Connected successfully!");
-                client.subscribe('smartparking/univ123/slots');
+            const tarifPerJam = trx.tarif ?? 0;
+            document.getElementById('m_tarif').innerText = 'Rp ' + formatRupiah(tarifPerJam);
+
+            const masuk = new Date(trx.waktu_masuk);
+            const sekarang = new Date();
+            const selisihMs = sekarang - masuk;
+            const totalMenit = Math.max(1, Math.floor(selisihMs / 60000));
+            document.getElementById('m_durasi').innerText = formatDurasiTeks(totalMenit);
+
+            const jumlahJam = Math.ceil(totalMenit / 60) || 1;
+            const totalBayar = jumlahJam * tarifPerJam;
+            document.getElementById('m_total').innerText = 'Rp ' + formatRupiah(totalBayar);
+
+            const myModal = new bootstrap.Modal(document.getElementById('modalTransaksi'));
+            myModal.show();
+        }
+
+        async function keluarkanKendaraan() {
+            if (!selectedTransaksi) return;
+
+            const confirm = await Swal.fire({
+                title: 'Konfirmasi Keluar',
+                text: `Proses pembayaran untuk ${selectedTransaksi.plat}?`,
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#3085d6',
+                cancelButtonColor: '#d33',
+                confirmButtonText: 'Ya, Selesaikan'
             });
 
-            client.on('message', (topic, message) => {
-                try {
-                    const payload = JSON.parse(message.toString());
-                    console.log("[MQTT] New Data:", payload);
-                    
-                    // Langsung update visual slot
-                    updateSlotsDirectly(payload);
-                    
-                    // Tetap sync ke DB untuk update tabel transaksi
-                    loadInitialData(); 
-                } catch (e) {
-                    console.error("[MQTT] Parse error:", e);
+            if (!confirm.isConfirmed) return;
+
+            Swal.fire({
+                title: 'Memproses Pembayaran...',
+                text: 'Mohon tunggu sebentar, sedang menyiapkan nota.',
+                allowOutsideClick: false,
+                allowEscapeKey: false,
+                showConfirmButton: false,
+                didOpen: () => { Swal.showLoading(); }
+            });
+
+            try {
+                const res = await fetch(`/admin/keluar/${selectedTransaksi.id}`, {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await res.json();
+                if (result.success) {
+                    const modalEl = document.getElementById('modalTransaksi');
+                    const modalInstance = bootstrap.Modal.getInstance(modalEl);
+                    if (modalInstance) modalInstance.hide();
+
+                    await Swal.fire({
+                        icon: 'success',
+                        title: 'Transaksi Berhasil',
+                        text: 'Gate dibuka dan data telah diperbarui.',
+                        timer: 2000,
+                        showConfirmButton: false
+                    });
+
+                    try {
+                        printNota(result.data, result.settings);
+                    } catch (err) {
+                        console.warn("Gagal mencetak nota:", err);
+                    }
+                    loadInitialData();
+                } else {
+                    Swal.fire('Gagal', result.message || 'Terjadi kesalahan sistem.', 'error');
                 }
-            });
+            } catch (e) {
+                console.error(e);
+                Swal.fire('Error', 'Gagal menghubungkan ke server.', 'error');
+            }
+        }
 
-            client.on('error', (err) => {
-                console.error("[MQTT] Connection error:", err);
-            });
+        function printNota(data, settings = {}) {
+            const totalMenit = parseInt(data.total_waktu) || 0;
+            const durasiStr = formatDurasiTeks(totalMenit);
+            const printWindow = window.open('', '_blank', 'width=400,height=600');
+
+            if (!printWindow) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Pop-up Diblokir',
+                    text: 'Nota tidak dapat terbuka otomatis. Silakan izinkan pop-up.',
+                });
+                return;
+            }
+
+            const html = `
+            <html>
+            <head>
+                <style>
+                    @page { size: 58mm auto; margin: 0; }
+                    body { font-family: 'Courier New', monospace; width: 48mm; margin: 0 auto; padding: 10px 5px; font-size: 11px; line-height: 1.2; }
+                    .center { text-align: center; }
+                    .line { border-top: 1px dashed #000; margin: 5px 0; }
+                    .row { display: flex; justify-content: space-between; }
+                    .bold { font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                <div class="center bold">${(settings.app_name || 'PARKING').toUpperCase()}</div>
+                <div class="center bold">${settings.lokasi_parkir || '-'}</div>
+                <div class="line"></div>
+                <div class="row"><span>Plat</span> <span class="bold">${data.plat_nomor}</span></div>
+                <div class="row"><span>Masuk</span> <span>${formatTime(data.waktu_masuk)}</span></div>
+                <div class="row"><span>Keluar</span> <span>${formatTime(data.waktu_keluar)}</span></div>
+                <div class="row"><span>Durasi</span> <span>${durasiStr}</span></div>
+                <div class="line"></div>
+                <div class="row bold" style="font-size: 13px;">
+                    <span>TOTAL</span> <span>Rp ${formatRupiah(data.total_bayar)}</span>
+                </div>
+                <div class="line"></div>
+                <div class="center">Terima kasih</div>
+                <script>
+                    window.onload = function() { window.print(); setTimeout(() => window.close(), 500); }
+                <\/script>
+            </body>
+            </html>`;
+            printWindow.document.write(html);
+            printWindow.document.close();
+        }
+
+        function formatTime(t) {
+            if (!t) return '-';
+            const date = new Date(t);
+            return date.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit' }) + ' ' +
+                date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function formatRupiah(n) { return new Intl.NumberFormat('id-ID').format(n); }
+
+        function formatDurasiTeks(totalMenit) {
+            const jam = Math.floor(totalMenit / 60);
+            const menit = totalMenit % 60;
+            return `${jam}j ${menit}m`;
+        }
+
+        function listenRealtime() {
+            if (typeof window.Echo === 'undefined') return;
+            window.Echo.channel('parking-channel')
+                .listen('.SlotUpdated', (e) => {
+                    console.log("[REALTIME] Event masuk:", e);
+                    if (e.slots && e.slots.slots) {
+                        updateSlotsDirectly(e.slots.slots);
+                    } else {
+                        loadInitialData();
+                    }
+                });
         }
 
         function updateSlotsDirectly(mqttData) {
@@ -276,101 +404,9 @@
                     plat: data.status === 'terisi' ? 'OCCUPIED' : '-',
                 });
             }
-            // Sortir kode agar urut A1, A2, dst
-            processed.sort((a, b) => a.kode.localeCompare(b.kode, undefined, {numeric: true}));
-            
-            localAreas = [{ nama: 'AREA PARKIR (LIVE)', kapasitas: processed.length, slot: processed }];
+            localAreas = [{ nama: 'AREA PARKIR', kapasitas: processed.length, slot: processed }];
             renderSlots();
         }
-
-        function openModal(id) {
-            const trx = activeTransactions.find(t => t.id === id);
-            if (!trx) return;
-
-            selectedTransaksi = trx;
-            document.getElementById('m_plat').innerText = trx.plat;
-            document.getElementById('m_jenis').innerText = trx.jenis;
-            document.getElementById('m_masuk').innerText = formatTime(trx.waktu_masuk);
-            
-            const tarifPerJam = trx.tarif ?? 0;
-            document.getElementById('m_tarif').innerText = 'Rp ' + formatRupiah(tarifPerJam);
-
-            const masuk = new Date(trx.waktu_masuk);
-            const sekarang = new Date();
-            const totalMenit = Math.max(1, Math.floor((sekarang - masuk) / 60000));
-            document.getElementById('m_durasi').innerText = formatDurasiTeks(totalMenit);
-
-            const jumlahJam = Math.ceil(totalMenit / 60) || 1;
-            document.getElementById('m_total').innerText = 'Rp ' + formatRupiah(jumlahJam * tarifPerJam);
-
-            new bootstrap.Modal(document.getElementById('modalTransaksi')).show();
-        }
-
-        async function keluarkanKendaraan() {
-            if (!selectedTransaksi) return;
-            const confirm = await Swal.fire({
-                title: 'Konfirmasi Keluar',
-                text: `Proses pembayaran untuk ${selectedTransaksi.plat}?`,
-                icon: 'warning',
-                showCancelButton: true,
-                confirmButtonText: 'Ya, Selesaikan'
-            });
-
-            if (!confirm.isConfirmed) return;
-
-            Swal.fire({ title: 'Memproses...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
-
-            try {
-                const res = await fetch(`/admin/keluar/${selectedTransaksi.id}`, {
-                    method: 'POST',
-                    headers: { 'X-CSRF-TOKEN': '{{ csrf_token() }}', 'Content-Type': 'application/json' }
-                });
-
-                const result = await res.json();
-                if (result.success) {
-                    bootstrap.Modal.getInstance(document.getElementById('modalTransaksi')).hide();
-                    await Swal.fire({ icon: 'success', title: 'Berhasil', timer: 1500, showConfirmButton: false });
-                    printNota(result.data, result.settings);
-                    loadInitialData();
-                } else {
-                    Swal.fire('Gagal', result.message, 'error');
-                }
-            } catch (e) {
-                Swal.fire('Error', 'Gagal koneksi server', 'error');
-            }
-        }
-
-        function printNota(data, settings = {}) {
-            const printWindow = window.open('', '_blank', 'width=400,height=600');
-            if (!printWindow) return;
-            const html = `
-                <html><head><style>
-                    @page { size: 58mm auto; margin: 0; }
-                    body { font-family: 'Courier New', monospace; width: 48mm; margin: 0 auto; padding: 10px; font-size: 11px; }
-                    .center { text-align: center; } .bold { font-weight: bold; } .line { border-top: 1px dashed #000; margin: 5px 0; }
-                </style></head><body>
-                    <div class="center bold">${(settings.app_name || 'PARKING').toUpperCase()}</div>
-                    <div class="line"></div>
-                    <div>Plat: ${data.plat_nomor}</div>
-                    <div>Durasi: ${formatDurasiTeks(data.total_waktu)}</div>
-                    <div class="bold">TOTAL: Rp ${formatRupiah(data.total_bayar)}</div>
-                    <div class="line"></div>
-                    <div class="center">Terima Kasih</div>
-                    <script>window.onload = function() { window.print(); setTimeout(() => window.close(), 500); }<\/script>
-                </body></html>`;
-            printWindow.document.write(html);
-            printWindow.document.close();
-        }
-
-        function formatTime(t) {
-            if (!t) return '-';
-            const date = new Date(t);
-            return date.toLocaleDateString('id-ID') + ' ' + date.toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'});
-        }
-
-        function formatRupiah(n) { return new Intl.NumberFormat('id-ID').format(n); }
-
-        function formatDurasiTeks(m) { return `${Math.floor(m/60)}j ${m%60}m`; }
 
         async function loadQR() {
             try {
@@ -379,14 +415,15 @@
                     document.getElementById("qr-container").innerHTML = data.svg;
                     document.getElementById("qr-code-text").innerText = data.kode ?? '-';
                 }
-            } catch (e) {}
+            } catch (e) { console.error("Gagal load QR", e); }
         }
 
         document.addEventListener('DOMContentLoaded', () => {
             loadInitialData();
             loadQR();
-            listenRealtime(); // MQTT Direct aktif
-            setInterval(loadQR, 30000); // Refresh QR tiap 30 detik
+            listenRealtime();
+            // setInterval(loadInitialData, 10000);
+            // setInterval(loadQR, 20000);
         });
     </script>
 @endpush
