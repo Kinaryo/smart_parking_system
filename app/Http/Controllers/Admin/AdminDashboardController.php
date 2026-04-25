@@ -23,16 +23,21 @@ class AdminDashboardController extends Controller
     {
         try {
             $slotsFromEsp = Cache::get('esp_slots_status', []);
+            
             $transaksiAktif = ParkirTransaksi::with('kendaraan')
                 ->where('status', 'aktif')
                 ->orderByDesc('waktu_masuk')
                 ->get();
 
             $processedSlots = [];
+            
             foreach ($slotsFromEsp as $kode => $dataEsp) {
-                $statusFisik = $dataEsp['status'] ?? 'kosong';
+                $statusRaw = $dataEsp['status'] ?? 'kosong';
+                $isOccupied = ($statusRaw == '1' || $statusRaw === true || $statusRaw == 'terisi');
+                $statusFisik = $isOccupied ? 'terisi' : 'kosong';
+
                 $processedSlots[] = [
-                    'kode'       => $kode,
+                    'kode'       => strtoupper(str_replace('slot_', '', $kode)),
                     'status'     => $statusFisik,
                     'jenis'      => $dataEsp['jenis'] ?? 'mobil',
                     'plat'       => $statusFisik === 'terisi' ? 'OCCUPIED' : '-',
@@ -64,6 +69,7 @@ class AdminDashboardController extends Controller
                 ],
                 'active_transactions' => $activeTrxData
             ]);
+
         } catch (\Exception $e) {
             Log::error("Dashboard Slots Error: " . $e->getMessage());
             return response()->json([

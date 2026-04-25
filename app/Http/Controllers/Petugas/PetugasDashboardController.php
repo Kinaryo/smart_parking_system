@@ -8,7 +8,6 @@ use App\Models\Gate;
 use App\Models\Setting;
 use App\Models\QRParkir;
 use App\Services\MqttService;
-// Event Laravel Broadcast dihapus karena sudah tidak digunakan
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -33,9 +32,12 @@ class PetugasDashboardController extends Controller
 
             $processedSlots = [];
             foreach ($slotsFromEsp as $kode => $dataEsp) {
-                $statusFisik = $dataEsp['status'] ?? 'kosong';
+                $statusRaw = $dataEsp['status'] ?? 'kosong';
+                $isOccupied = ($statusRaw == '1' || $statusRaw === true || $statusRaw == 'terisi');
+                $statusFisik = $isOccupied ? 'terisi' : 'kosong';
+
                 $processedSlots[] = [
-                    'kode'       => $kode,
+                    'kode'       => strtoupper(str_replace('slot_', '', $kode)),
                     'status'     => $statusFisik,
                     'jenis'      => $dataEsp['jenis'] ?? 'mobil',
                     'plat'       => $statusFisik === 'terisi' ? 'OCCUPIED' : '-',
@@ -100,7 +102,6 @@ class PetugasDashboardController extends Controller
                     'status' => 'tersedia',
                     'aktif'  => true
                 ]);
-                // Broadcast QRUpdated dihapus
             }
 
             $mqttPayload = [
@@ -116,8 +117,6 @@ class PetugasDashboardController extends Controller
             ];
 
             $mqttSent = MqttService::publish("smartparking/univ123/commands", $mqttPayload);
-
-            // Broadcast TransaksiSelesai dihapus karena FE sudah pakai polling syncDatabase()
 
             DB::commit();
 
