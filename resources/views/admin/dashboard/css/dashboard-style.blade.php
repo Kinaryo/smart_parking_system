@@ -147,5 +147,26 @@
                 width: 100%;
             }
         }
+
+
+        .slot.processing {
+            opacity: 0.7;
+            border: 2px dashed #0d6efd;
+            animation: pulse-border 1.5s infinite;
+        }
+
+        @keyframes pulse-border {
+            0% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.02);
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
     </style>
 @endpush

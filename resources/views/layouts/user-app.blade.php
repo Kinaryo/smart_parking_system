@@ -14,14 +14,11 @@
 
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap"
-        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-    {{-- @vite(['resources/css/app.css']) --}}
-
-    <link rel="stylesheet" href="{{ asset('css/app.css') }}">
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
 
     <style>
         :root {
@@ -120,8 +117,7 @@
         <a href="{{ route('user.dashboard') }}" class="{{ request()->routeIs('user.dashboard*') ? 'active' : '' }}">
             <i class="bi bi-house-fill"></i><span>Home</span>
         </a>
-        <a href="{{ route('user.kendaraan.index') }}"
-            class="{{ request()->routeIs('user.kendaraan.*') ? 'active' : '' }}">
+        <a href="{{ route('user.kendaraan.index') }}" class="{{ request()->routeIs('user.kendaraan.*') ? 'active' : '' }}">
             <i class="bi bi-car-front"></i><span>Kendaraan</span>
         </a>
         <a href="{{ route('user.profile') }}" class="{{ request()->routeIs('user.profile') ? 'active' : '' }}">
@@ -131,40 +127,35 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
-    {{-- @vite(['resources/js/app.js']) --}}
-    <script src="{{ asset('js/app.js') }}"></script>
     <script>
-
         document.addEventListener('DOMContentLoaded', function () {
             console.log("App initialized.");
+
+            const btnLogout = document.getElementById('btnLogout');
+            if (btnLogout) {
+                btnLogout.onclick = function () {
+                    Swal.fire({
+                        title: 'Keluar',
+                        text: "Apakah Anda Ingin Keluar ?",
+                        icon: 'warning',
+                        showCancelButton: true,
+                        confirmButtonColor: '#d33',
+                        cancelButtonColor: '#6c757d',
+                        confirmButtonText: 'Ya',
+                        customClass: {
+                            title: 'swal-title-small',
+                            htmlContainer: 'swal-text-small',
+                            icon: 'swal-icon-small'
+                        }
+                    }).then((result) => {
+                        if (result.isConfirmed) {
+                            document.getElementById('formLogout').submit();
+                        }
+                    });
+                };
+            }
         });
 
-
-        const btnLogout = document.getElementById('btnLogout');
-        if (btnLogout) {
-            btnLogout.onclick = function () {
-                Swal.fire({
-                    title: 'Keluar',
-                    text: "Apakah Anda Ingin Keluar ?",
-                    icon: 'warning',
-                    showCancelButton: true,
-                    confirmButtonColor: '#d33',
-                    cancelButtonColor: '#6c757d',
-                    confirmButtonText: 'Ya',
-                    customClass: {
-                        title: 'swal-title-small',
-                        htmlContainer: 'swal-text-small',
-                        icon: 'swal-icon-small'
-                    }
-                }).then((result) => {
-                    if (result.isConfirmed) {
-                        document.getElementById('formLogout').submit();
-                    }
-                });
-            };
-        }
-    </script>
-    <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function () {
                 navigator.serviceWorker.register("{{ asset('sw.js') }}")
@@ -179,5 +170,4 @@
     </script>
     @stack('scripts')
 </body>
-
 </html>
