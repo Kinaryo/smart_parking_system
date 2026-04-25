@@ -14,11 +14,14 @@
 
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap"
+        rel="stylesheet">
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-    @vite(['resources/css/app.css'])
+    {{-- @vite(['resources/css/app.css']) --}}
+
+    <link rel="stylesheet" href="{{ asset('css/app.css') }}">
 
     <style>
         :root {
@@ -128,15 +131,15 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
-    @vite(['resources/js/app.js'])
-
+    {{-- @vite(['resources/js/app.js']) --}}
+    <script src="{{ asset('js/app.js') }}"></script>
     <script>
 
         document.addEventListener('DOMContentLoaded', function () {
             console.log("App initialized.");
         });
 
-        // Logout logic
+
         const btnLogout = document.getElementById('btnLogout');
         if (btnLogout) {
             btnLogout.onclick = function () {
