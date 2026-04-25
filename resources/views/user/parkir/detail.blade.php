@@ -3,8 +3,7 @@
 @section('title', 'Detail Parkir | Smart Parking')
 
 @push('styles')
-    <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@48,400,0,0" />
+
 
     <style>
         .card-detail {
@@ -57,6 +56,8 @@
             color: #15803d;
         }
     </style>
+
+
 @endpush
 
 @section('content')
@@ -167,135 +168,90 @@
         </div>
     </div>
 
+
 @endsection
 
 @push('scripts')
-    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-    @push('scripts')
-        <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-        <script>
-            const transaksiId = "{{ $transaksi->id }}";
-            let statusSekarang = "{{ $transaksi->status }}";
-            let liveInterval = null;
-            let pollInterval = null;
+    <script>
+        const transaksiId = "{{ $transaksi->id }}";
+        const waktuMasuk = "{{ $transaksi->waktu_masuk }}";
+        const tarifPerJam = {{ $transaksi->tarif_per_jam }};
+        let statusSekarang = "{{ $transaksi->status }}";
 
-            function formatDurasi(menit) {
-                const jam = Math.floor(menit / 60);
-                const sisa = menit % 60;
-                return jam > 0 ? `${jam} jam ${sisa} menit` : `${menit} menit`;
-            }
+        let liveInterval = null;
+        let pollInterval = null;
 
-            function startLiveCounter() {
-                const start = new Date("{{ $transaksi->waktu_masuk }}").getTime();
-                const tarif = {{ $transaksi->tarif_per_jam }};
+        function formatRupiah(n) {
+            return new Intl.NumberFormat('id-ID').format(n);
+        }
 
-                if (liveInterval) clearInterval(liveInterval);
+        function formatDurasi(menit) {
+            const jam = Math.floor(menit / 60);
+            const sisa = menit % 60;
+            return jam > 0 ? `${jam} jam ${sisa} menit` : `${menit} menit`;
+        }
 
-                console.log("[LIVE] Counter started", { start, tarif });
+        function updateLiveCounter() {
+            if (statusSekarang !== 'aktif') return;
 
-                liveInterval = setInterval(() => {
-                    const now = new Date().getTime();
-                    const diff = Math.max(0, now - start);
-                    const menit = Math.floor(diff / 60000);
+            const start = new Date(waktuMasuk).getTime();
+            const now = new Date().getTime();
+            const diff = Math.max(0, now - start);
+            const menit = Math.floor(diff / 60000);
 
-                    console.log("[LIVE] Tick", { menit });
+            document.getElementById('durasiDisplay').innerText = formatDurasi(menit);
 
-                    document.getElementById('durasiDisplay').innerText = formatDurasi(menit);
+            const tagihanJam = Math.max(1, Math.ceil(menit / 60));
+            const total = tagihanJam * tarifPerJam;
 
-                    const tagihanJam = Math.max(1, Math.ceil(menit / 60));
-                    const total = tagihanJam * tarif;
+            document.getElementById('biayaDisplay').innerText = formatRupiah(total);
+        }
 
-                    document.getElementById('biayaDisplay').innerText =
-                        total.toLocaleString('id-ID');
+        async function syncStatus() {
+            try {
+                const res = await fetch(`/transaksi/status/${transaksiId}?t=${Date.now()}`);
+                const data = await res.json();
 
-                    console.log("[LIVE] Update biaya", { tagihanJam, total });
-                }, 1000);
-            }
+                if (data.status === 'selesai' && statusSekarang !== 'selesai') {
+                    statusSekarang = 'selesai';
 
-            function syncStatus() {
-                console.log("[SYNC] Request status transaksi:", transaksiId);
+                    if (liveInterval) clearInterval(liveInterval);
+                    if (pollInterval) clearInterval(pollInterval);
 
-                fetch(`/transaksi/status/${transaksiId}`)
-                    .then(res => res.json())
-                    .then(data => {
-                        console.log("[SYNC] Response:", data);
+                    document.getElementById('statusBadge').className = "status-badge bg-light-success text-success";
+                    document.getElementById('statusBadge').innerText = "SELESAI";
 
-                        if (data.status === 'selesai' && statusSekarang !== 'selesai') {
-                            console.log("[SYNC] Status berubah menjadi SELESAI");
+                    document.getElementById('biayaBox').className = "mt-4 p-4 rounded-4 bg-success text-white";
+                    document.getElementById('biayaLabel').innerText = "TOTAL PEMBAYARAN";
 
-                            statusSekarang = 'selesai';
+                    document.getElementById('jamKeluar').innerText = data.waktu_keluar;
+                    document.getElementById('durasiDisplay').innerText = data.durasi_teks;
+                    document.getElementById('biayaDisplay').innerText = data.total_bayar_formatted;
 
-                            if (liveInterval) clearInterval(liveInterval);
-                            if (pollInterval) clearInterval(pollInterval);
-
-                            document.getElementById('statusBadge').className =
-                                "status-badge bg-light-success text-success";
-                            document.getElementById('statusBadge').innerText = "SELESAI";
-
-                            document.getElementById('biayaBox').className =
-                                "mt-4 p-4 rounded-4 bg-success text-white";
-
-                            document.getElementById('biayaLabel').innerText =
-                                "TOTAL PEMBAYARAN";
-
-                            document.getElementById('jamKeluar').innerText =
-                                data.waktu_keluar;
-
-                            document.getElementById('durasiDisplay').innerText =
-                                data.durasi_teks;
-
-                            document.getElementById('biayaDisplay').innerText =
-                                data.total_bayar_formatted;
-
-                            console.log("[SYNC] UI updated to selesai");
-
-                            Swal.fire({
-                                icon: 'success',
-                                title: 'Parkir Selesai!',
-                                text: 'Kendaraan telah keluar.',
-                                timer: 3000,
-                                showConfirmButton: false
-                            });
-                        } else {
-                            console.log("[SYNC] Belum selesai / tidak berubah status");
-                        }
-                    })
-                    .catch(err => {
-                        console.error("[SYNC] Error:", err);
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Parkir Selesai!',
+                        text: 'Kendaraan telah keluar.',
+                        timer: 4000,
+                        showConfirmButton: false
                     });
-            }
-
-            function initRealtime() {
-                console.log("[ECHO] Init realtime...");
-
-                if (typeof window.Echo !== 'undefined') {
-                    console.log("[ECHO] Connected, listening channel");
-
-                    window.Echo.channel(`transaksi.${transaksiId}`)
-                        .listen('.selesai', (e) => {
-                            console.log("[ECHO] Event SELSAI diterima:", e);
-                            syncStatus();
-                        });
-
-                } else {
-                    console.warn("[ECHO] Not ready, retry...");
-                    setTimeout(initRealtime, 1000);
                 }
+            } catch (err) {
+                console.error("Polling error:", err);
             }
+        }
 
+        document.addEventListener('DOMContentLoaded', () => {
             if (statusSekarang === 'aktif') {
-                startLiveCounter();
+                updateLiveCounter();
+                liveInterval = setInterval(updateLiveCounter, 1000);
+
+                pollInterval = setInterval(syncStatus, 4000);
             }
+        });
+    </script>
 
-            initRealtime();
 
-            console.log("[POLL] Start interval 5s");
-            pollInterval = setInterval(() => {
-                console.log("[POLL] Checking status...");
-                syncStatus();
-            }, 5000);
-        </script>
-    @endpush
 @endpush

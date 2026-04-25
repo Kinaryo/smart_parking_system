@@ -29,6 +29,7 @@ use App\Http\Controllers\Admin\AdminLaporanPetugasController;
 use App\Http\Controllers\Admin\AdminRiwayatTransaksiController;
 use App\Http\Controllers\Admin\AdminSettingController;
 use App\Http\Controllers\Admin\AdminTarifController;
+use App\Http\Controllers\Admin\CetakNotaController;
 use App\Http\Controllers\LandingController;
 use Illuminate\Support\Facades\Broadcast;
 
@@ -86,6 +87,10 @@ Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'index'])->name('profile.index');
     Route::post('/profile/update', [ProfileController::class, 'update'])->name('profile.update');
     Route::post('/profile/change-password', [ProfileController::class, 'changePassword'])->name('profile.change-password');
+   
+    Route::get('nota/{id}', [CetakNotaController::class, 'show'])->name('cetakNota');
+   
+   
     /*
     |--------------------------------------------------------------------------
     | USER

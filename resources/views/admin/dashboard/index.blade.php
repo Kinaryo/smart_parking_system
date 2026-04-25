@@ -9,7 +9,7 @@
                 <div class="card border-0 shadow-sm rounded overflow-hidden">
                     <div class="card-header bg-primary-subtle py-3">
                         <h4 class="fw-bold mb-1 text-dark">Monitoring Parkir</h4>
-                        <p class="text-muted small mb-0">Sistem Parkir Realtime (Pusher + MQTT Mode)</p>
+                        <p class="text-muted small mb-0">Sistem Parkir Realtime (MQTT + Auto-Polling AJAX)</p>
                     </div>
                 </div>
             </div>
@@ -65,7 +65,7 @@
         <div id="kantung-wrapper" class="mb-2">
             <div class="text-center py-5">
                 <div class="spinner-border text-primary"></div>
-                <p class="text-muted mt-2">Menghubungkan ke Sistem Realtime...</p>
+                <p class="text-muted mt-2">Menghubungkan ke MQTT & Sinkronisasi Data...</p>
             </div>
         </div>
 
@@ -114,49 +114,85 @@
         let localAreas = [];
         let activeTransactions = [];
         let selectedTransaksi = null;
-        let isLoading = false;
+        let isFetching = false;
         let processingSlots = new Set();
 
-        async function fetchJSON(url, options = {}, retry = 2) {
-            try {
-                const res = await fetch(url + (url.includes('?') ? '&' : '?') + '_=' + Date.now(), {
-                    ...options,
-                    cache: "no-store"
-                });
-                return await res.json();
-            } catch (e) {
-                if (retry > 0) {
-                    await new Promise(r => setTimeout(r, 1000));
-                    return fetchJSON(url, options, retry - 1);
-                }
-                throw e;
-            }
+        async function fetchJSON(url) {
+            const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`, {
+                cache: "no-store"
+            });
+            return await res.json();
         }
 
-        async function loadInitialData() {
-            if (isLoading) return;
-            isLoading = true;
+        async function syncDatabase() {
+            if (isFetching) return;
+            isFetching = true;
             try {
                 const data = await fetchJSON(SLOT_URL);
-                const newAreas = data.areas || [];
-
-                newAreas.forEach(area => {
-                    area.slot.forEach(s => {
-                        if (processingSlots.has(s.kode)) {
-                            processingSlots.delete(s.kode);
-                        }
-                    });
-                });
-
-                localAreas = newAreas;
+                localAreas = data.areas || [];
                 activeTransactions = data.active_transactions || [];
+                processingSlots.clear();
                 renderSlots();
                 renderTable();
             } catch (e) {
-                console.error("[AJAX] Gagal sinkronisasi", e);
+                console.error("AJAX Error", e);
             } finally {
-                isLoading = false;
+                isFetching = false;
             }
+        }
+
+        function listenMQTT() {
+            const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
+            const options = {
+                clientId: 'web_dashboard_' + Math.random().toString(16).substr(2, 8),
+                clean: true,
+                connectTimeout: 5000,
+            };
+
+            const client = mqtt.connect(brokerUrl, options);
+
+            client.on('connect', () => {
+                client.subscribe('smartparking/univ123/slots');
+            });
+
+            client.on('message', (topic, message) => {
+                try {
+                    const payload = JSON.parse(message.toString());
+                    updateSlotsFromMQTT(payload);
+                } catch (e) {}
+            });
+        }
+
+        function updateSlotsFromMQTT(mqttData) {
+            let changed = false;
+            for (const [kode, data] of Object.entries(mqttData)) {
+                localAreas.forEach(area => {
+                    const targetSlot = area.slot.find(s => s.kode === kode);
+                    if (targetSlot && targetSlot.status !== data.status) {
+                        targetSlot.status = data.status;
+                        processingSlots.add(kode);
+                        changed = true;
+                    }
+                });
+            }
+            if (changed) {
+                renderSlots();
+                setTimeout(syncDatabase, 1500);
+            }
+        }
+
+        async function loadQR() {
+            try {
+                const data = await fetchJSON(QR_URL);
+                if (data.success) {
+                    const container = document.getElementById("qr-container");
+                    const textDisplay = document.getElementById("qr-code-text");
+                    if (textDisplay.innerText !== (data.kode ?? '-')) {
+                        container.innerHTML = data.svg;
+                        textDisplay.innerText = data.kode ?? '-';
+                    }
+                }
+            } catch (e) {}
         }
 
         function handleSearch() {
@@ -169,7 +205,7 @@
             const search = document.getElementById('searchPlat').value.toUpperCase();
 
             if (localAreas.length === 0) {
-                wrapper.innerHTML = `<div class="text-center text-muted py-5">Menunggu data sensor...</div>`;
+                wrapper.innerHTML = `<div class="text-center text-muted py-5">Memuat data...</div>`;
                 return;
             }
 
@@ -181,22 +217,21 @@
                     const kodeSlot = (s.kode ?? '').toUpperCase();
                     if (search && !platNomor.includes(search) && !kodeSlot.includes(search)) return;
 
-                    const isProcessing = processingSlots.has(s.kode);
                     const statusClass = s.status === 'terisi' ? 'terisi' : 'kosong';
-                    const processingClass = isProcessing ? 'opacity-50 border-primary border-2' : '';
                     const icon = s.jenis === 'motor' ? 'motorcycle' : 'directions_car';
+                    const isProcessing = processingSlots.has(s.kode);
 
                     slotHtml += `
-                    <div class="slot ${statusClass} ${processingClass}" style="cursor:default; position:relative;">
+                    <div class="slot ${statusClass} ${isProcessing ? 'opacity-50 border-primary' : ''}">
                         <span class="kode-slot">${s.kode}</span>
                         <span class="material-icons">${icon}</span>
                         <div class="plat-info mt-1">
-                            ${isProcessing
-                            ? `<div class="spinner-border spinner-border-sm text-primary" role="status"></div>`
-                            : (s.status === 'terisi'
-                                ? `<strong class="d-block" style="font-size:0.8rem">TERISI</strong>`
-                                : `<span class="small">KOSONG</span>`)
-                        }
+                            ${isProcessing 
+                                ? `<div class="spinner-border spinner-border-sm text-primary"></div>`
+                                : (s.status === 'terisi' 
+                                    ? `<strong class="d-block" style="font-size:0.75rem">${platNomor}</strong>`
+                                    : `<span class="small" style="font-size:0.7rem">KOSONG</span>`)
+                            }
                         </div>
                     </div>`;
                 });
@@ -232,70 +267,15 @@
                     <td class="ps-3 fw-bold">${t.plat}</td>
                     <td><span class="badge bg-secondary-subtle text-dark text-uppercase py-2 px-3">${t.jenis}</span></td>
                     <td>${t.masuk}</td>
-                    <td>${t.total_waktu} Menit</td>
+                    <td><span class="text-primary fw-bold">${t.total_waktu}</span> mnt</td>
                     <td class="text-center">
-                        <button class="btn btn-sm btn-primary px-3" onclick="openModal(${t.id})">
+                        <button class="btn btn-sm btn-primary px-3 rounded-pill" onclick="openModal(${t.id})">
                             <i class="bi bi-box-arrow-right me-1"></i> Keluar
                         </button>
                     </td>
                 </tr>`;
             });
             tbody.innerHTML = html;
-        }
-
-        function initPusher() {
-            if (typeof window.Echo !== 'undefined') {
-                window.Echo.channel('parking-channel')
-                    .listen('.TransaksiChanged', (e) => {
-                        loadInitialData();
-                    })
-                    .listen('.SlotUpdated', (e) => {
-                        loadInitialData();
-                    })
-                    .listen('.QRUpdated', (e) => {
-                        loadQR();
-                    });
-            } else {
-                setTimeout(initPusher, 1000);
-            }
-        }
-
-        function listenRealtime() {
-            const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
-            const options = {
-                clientId: 'web_dashboard_' + Math.random().toString(16).substr(2, 8),
-                clean: true,
-                connectTimeout: 5000,
-            };
-
-            const client = mqtt.connect(brokerUrl, options);
-
-            client.on('connect', () => {
-                client.subscribe('smartparking/univ123/slots');
-            });
-
-            client.on('message', (topic, message) => {
-                try {
-                    const payload = JSON.parse(message.toString());
-                    updateSlotsDirectly(payload);
-                } catch (e) {
-                    console.error("[MQTT] Error", e);
-                }
-            });
-        }
-
-        function updateSlotsDirectly(mqttData) {
-            for (const [kode, data] of Object.entries(mqttData)) {
-                localAreas.forEach(area => {
-                    const targetSlot = area.slot.find(s => s.kode === kode);
-                    if (targetSlot && targetSlot.status !== data.status) {
-                        targetSlot.status = data.status;
-                        processingSlots.add(kode);
-                    }
-                });
-            }
-            renderSlots();
-            setTimeout(() => { loadInitialData(); }, 2000);
         }
 
         function openModal(id) {
@@ -328,6 +308,7 @@
                 text: `Proses pembayaran untuk ${selectedTransaksi.plat}?`,
                 icon: 'warning',
                 showCancelButton: true,
+                confirmButtonColor: '#0061ff',
                 confirmButtonText: 'Ya, Selesaikan'
             });
 
@@ -346,7 +327,7 @@
                     bootstrap.Modal.getInstance(document.getElementById('modalTransaksi')).hide();
                     await Swal.fire({ icon: 'success', title: 'Berhasil', timer: 1500, showConfirmButton: false });
                     printNota(result.data, result.settings);
-                    loadInitialData();
+                    syncDatabase();
                 } else {
                     Swal.fire('Gagal', result.message, 'error');
                 }
@@ -366,31 +347,34 @@
             <head>
                 <style>
                     @page { size: 58mm auto; margin: 0; }
-                    body { font-family: 'Courier New', monospace; width: 48mm; margin: 0 auto; padding: 10px 0; font-size: 12px; }
+                    body { font-family: 'Courier New', monospace; width: 48mm; margin: 0 auto; padding: 10px 0; font-size: 11px; line-height: 1.2; }
                     .center { text-align: center; }
                     .bold { font-weight: bold; }
                     .line { border-top: 1px dashed #000; margin: 5px 0; }
                     .flex { display: flex; justify-content: space-between; }
+                    .header-title { font-size: 14px; margin-bottom: 2px; }
                 </style>
             </head>
             <body>
-                <div class="center bold">${(settings.app_name || 'SMART PARKING').toUpperCase()}</div>
-                <div class="center">${settings.app_address || 'Sistem Parkir Otomatis'}</div>
+                <div class="center bold header-title">${(settings.app_name || 'SMART PARKING').toUpperCase()}</div>
+                <div class="center">${settings.lokasi_parkir || ''}</div>
+                <div class="center">${settings.alamat || ''}</div>
+                <div class="center">${settings.kontak || ''}</div>
                 <div class="line"></div>
-                <div class="flex"><span>ID:</span> <span>#${data.id}</span></div>
+                <div class="flex"><span>Tgl Keluar:</span> <span>${data.waktu_keluar}</span></div>
                 <div class="line"></div>
-                <div class="bold">PLAT: ${data.plat_nomor}</div>
-                <div>MASUK: ${formatTime(data.waktu_masuk)}</div>
-                <div>KELUAR: ${formatTime(data.waktu_keluar)}</div>
-                <div>DURASI: ${durasiStr}</div>
+                <div class="bold" style="font-size:13px">PLAT: ${data.plat_nomor}</div>
+                <div class="flex"><span>Masuk:</span> <span>${formatTime(data.waktu_masuk)}</span></div>
+                <div class="flex"><span>Keluar:</span> <span>${formatTime(data.waktu_keluar)}</span></div>
+                <div class="flex"><span>Durasi:</span> <span>${durasiStr}</span></div>
                 <div class="line"></div>
-                <div class="flex bold"><span>TOTAL:</span> <span>Rp ${formatRupiah(data.total_bayar)}</span></div>
+                <div class="flex bold" style="font-size:13px"><span>TOTAL:</span> <span>Rp ${formatRupiah(data.total_bayar)}</span></div>
                 <div class="line"></div>
-                <div class="center" style="font-size: 10px;">TERIMA KASIH</div>
+                <div class="center" style="margin-top:10px">TERIMA KASIH ATAS KUNJUNGAN ANDA</div>
+                <div class="center">SIMPAN STRUK SEBAGAI BUKTI</div>
                 <script>window.onload = function() { window.print(); setTimeout(() => { window.close(); }, 500); }<\/script>
             </body>
-            </html>
-        `;
+            </html>`;
             printWindow.document.write(html);
             printWindow.document.close();
         }
@@ -400,25 +384,15 @@
             const date = new Date(t);
             return date.toLocaleDateString('id-ID') + ' ' + date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
         }
-
         function formatRupiah(n) { return new Intl.NumberFormat('id-ID').format(n); }
         function formatDurasiTeks(m) { return `${Math.floor(m / 60)}j ${m % 60}m`; }
 
-        async function loadQR() {
-            try {
-                const data = await fetchJSON(QR_URL);
-                if (data.success) {
-                    document.getElementById("qr-container").innerHTML = data.svg;
-                    document.getElementById("qr-code-text").innerText = data.kode ?? '-';
-                }
-            } catch (e) { }
-        }
-
         document.addEventListener('DOMContentLoaded', () => {
-            loadInitialData();
-            loadQR();
-            listenRealtime();
-            initPusher();
+            syncDatabase(); 
+            loadQR();      
+            listenMQTT();  
+            setInterval(syncDatabase, 4000); 
+            setInterval(loadQR, 5000);      
         });
     </script>
 @endpush
