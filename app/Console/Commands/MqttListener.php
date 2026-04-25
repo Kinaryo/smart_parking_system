@@ -40,17 +40,27 @@ class MqttListener extends Command
                 $data = json_decode($message, true);
 
                 if (json_last_error() === JSON_ERROR_NONE) {
-                    // Tetap simpan di cache untuk backup/initial load
                     Cache::put('esp_slots_status', $data);
-
 
                     broadcast(new SlotUpdated([
                         'type' => 'status_update',
                         'slots' => $data,
-                        'source' => 'mqtt_direct' // Flag penanda data fresh
+                        'source' => 'mqtt_direct'
                     ]));
 
                     $this->info("\n[REALTIME] Data MQTT dipush ke Dashboard.");
+
+                    // ACK ke ESP / client
+                    $ackPayload = json_encode([
+                        "command" => "SLOT_UPDATE",
+                        "status"  => "success",
+                        "slots"   => $data,
+                        "time"    => now()->toDateTimeString()
+                    ]);
+
+                    $mqtt->publish('smartparking/univ123/commands', $ackPayload, 1, false);
+
+                    $this->info("[ACK] SLOT_UPDATE dikirim ke ESP");
                 }
             }, 1);
 
@@ -71,7 +81,6 @@ class MqttListener extends Command
                         $kode = $qr->kode;
                     }
 
-                    // RESPONSE QR DATA
                     $payload = json_encode([
                         "command"   => "QRData",
                         "qr"        => $kode,
