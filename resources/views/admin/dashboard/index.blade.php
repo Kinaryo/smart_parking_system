@@ -280,14 +280,22 @@
                     const modalEl = document.getElementById('modalTransaksi');
                     const modalInstance = bootstrap.Modal.getInstance(modalEl);
                     if (modalInstance) modalInstance.hide();
-                    printNota(result.data, result.settings);
-                    Swal.fire({
+
+                    // Tampilkan sukses terlebih dahulu
+                    await Swal.fire({
                         icon: 'success',
                         title: 'Transaksi Berhasil',
-                        text: 'Nota telah dicetak.',
+                        text: 'Gate dibuka dan data telah diperbarui.',
                         timer: 2000,
                         showConfirmButton: false
                     });
+
+                    // Jalankan fungsi cetak secara terpisah agar tidak mengganggu alur jika pop-up diblokir
+                    try {
+                        printNota(result.data, result.settings);
+                    } catch (err) {
+                        console.warn("Gagal mencetak nota:", err);
+                    }
 
                     loadInitialData();
                 } else {
@@ -298,11 +306,23 @@
                 Swal.fire('Error', 'Gagal menghubungkan ke server.', 'error');
             }
         }
+
         function printNota(data, settings = {}) {
             const totalMenit = parseInt(data.total_waktu) || 0;
             const durasiStr = formatDurasiTeks(totalMenit);
 
             const printWindow = window.open('', '_blank', 'width=400,height=600');
+
+            // Proteksi jika Pop-up diblokir browser
+            if (!printWindow || printWindow.closed || typeof printWindow.closed === 'undefined') {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Pop-up Diblokir',
+                    text: 'Nota tidak dapat terbuka otomatis. Silakan izinkan pop-up untuk situs ini di bar alamat browser Anda.',
+                });
+                return;
+            }
+
             const html = `
             <html>
             <head>
@@ -324,10 +344,10 @@
                 </style>
             </head>
             <body>
-                <div class="center bold">${settings.app_name.toUpperCase()}</div>
-                <div class="center bold">${settings.lokasi_parkir}</div>
-                <div class="center address">${settings.alamat}</div>
-                <div class="center address">Telp: ${settings.kontak}</div>
+                <div class="center bold">${(settings.app_name || 'PARKING').toUpperCase()}</div>
+                <div class="center bold">${settings.lokasi_parkir || '-'}</div>
+                <div class="center address">${settings.alamat || ''}</div>
+                <div class="center address">Telp: ${settings.kontak || '-'}</div>
 
                 <div class="line"></div>
                 <div class="row"><span>Plat</span> <span class="bold">${data.plat_nomor}</span></div>
@@ -354,6 +374,7 @@
             printWindow.document.write(html);
             printWindow.document.close();
         }
+
         function formatTime(t) {
             if (!t) return '-';
             const date = new Date(t);
