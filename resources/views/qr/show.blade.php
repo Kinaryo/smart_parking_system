@@ -3,14 +3,23 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>QR Gate Parkir</title>
+    <title>@yield('title', 'QR Gate Parkir - Smart Parking')</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 
+    <link rel="icon" href="{{ asset('favicon.ico') }}">
+    <link rel="apple-touch-icon" href="{{ asset('favicon.ico') }}">
+    <link rel="manifest" href="{{ asset('manifest.json') }}">
+    <meta name="theme-color" content="#0061ff">
+
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Icons" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-    <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/laravel-echo/1.15.0/echo.iife.js"></script>
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
+
+    @include('partials.css.petugas-style')
+    @stack('styles')
 
     <style>
         :root {
@@ -22,7 +31,7 @@
         body, html {
             height: 100%;
             margin: 0;
-            overflow: hidden; /* Mencegah scroll */
+            overflow: hidden;
         }
 
         body {
@@ -44,7 +53,7 @@
             -webkit-backdrop-filter: blur(20px);
             width: 100%;
             max-width: 420px;
-            max-height: 95vh; /* Memastikan tidak melebihi tinggi layar */
+            max-height: 95vh;
             padding: 2rem 1.5rem;
             border-radius: 32px;
             text-align: center;
@@ -76,9 +85,10 @@
             display: inline-block;
             align-self: center;
             box-shadow: 0 0 40px rgba(56, 189, 248, 0.1);
+            min-height: 250px;
+            min-width: 250px;
         }
 
-        /* Responsive QR Size */
         .qr-container svg, .qr-container img {
             width: 60vw !important;
             height: 60vw !important;
@@ -126,83 +136,78 @@
             font-weight: 600;
             color: #94a3b8;
         }
-
-        @media (max-height: 600px) {
-            .card-box { gap: 0.8rem; padding: 1.5rem 1rem; }
-            .instruction-text { display: none; }
-            .qr-container { padding: 10px; }
-            .qr-container svg, .qr-container img { width: 45vw !important; height: 45vw !important; }
-        }
     </style>
 </head>
 
 <body>
 
-<div class="card-box">
-    <div>
-        <h1 class="title">QR Gate Parkir</h1>
-        <p class="instruction-text">Arahkan kamera ponsel Anda ke kode QR di bawah ini untuk membuka palang pintu secara otomatisk</p>
-    </div>
+    <div class="card-box">
+        <div>
+            <h1 class="title">QR Gate Parkir</h1>
+            <p class="instruction-text">Arahkan kamera ponsel Anda ke kode QR di bawah ini untuk membuka palang pintu secara otomatis</p>
+        </div>
 
-    <div class="qr-container" id="qr-box">
-        {!! QrCode::size(250)->margin(1)->generate($qr->kode) !!}
-    </div>
+        <div class="qr-container" id="qr-box">
+            {!! QrCode::size(250)->margin(1)->generate($qr->kode) !!}
+        </div>
 
-    <div>
-        <div class="kode-display" id="kode">
-            {{ $qr->kode }}
+        <div>
+            <div class="kode-display" id="kode">
+                {{ $qr->kode }}
+            </div>
+        </div>
+
+        <div class="status-container">
+            <div class="status-dot"></div>
+            <div class="status-text" id="status">
+                {{ $qr->status }}
+            </div>
         </div>
     </div>
 
-    <div class="status-container">
-        <div class="status-dot"></div>
-        <div class="status-text" id="status">
-            {{ $qr->status }}
-        </div>
-    </div>
-</div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    @include('partials.scripts.main')
+    @stack('scripts')
 
-<script>
-    const QR_URL = "/ajax-qr-show";
+    <script>
+        const QR_URL = "/ajax-qr-show";
+        let lastKode = "{{ $qr->kode }}";
 
-    async function loadQR() {
-        try {
-            const res = await fetch(QR_URL);
-            const data = await res.json();
-            if (data.success) {
-                document.getElementById("qr-box").innerHTML = data.svg;
-                document.getElementById("kode").innerText = data.kode;
-                document.getElementById("status").innerText = data.status;
-            }
-        } catch (e) { console.error(e); }
-    }
-
-    window.Pusher = Pusher;
-    window.Echo = new Echo({
-        broadcaster: 'pusher',
-        key: "{{ env('PUSHER_APP_KEY') }}",
-        cluster: "{{ env('PUSHER_APP_CLUSTER') }}",
-        forceTLS: true
-    });
-
-    function listenRealtimeQR() {
-        window.Echo.channel('slot-tracker')
-            .listen('.EspHardwareCommand', (e) => {
-                if (e.command === "UPDATE_DISPLAY_QR") {
-                    document.getElementById("qr-box").innerHTML =
-                        `<img src="https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${e.payload.qr_string}" />`;
-                    document.getElementById("kode").innerText = e.payload.qr_string;
-                    document.getElementById("status").innerText = e.payload.status;
+        async function loadQR() {
+            try {
+                const res = await fetch(QR_URL);
+                const data = await res.json();
+                
+                if (data.success) {
+                    if (data.kode !== lastKode) {
+                        document.getElementById("qr-box").innerHTML = data.svg;
+                        document.getElementById("kode").innerText = data.kode;
+                        lastKode = data.kode;
+                    }
+                    document.getElementById("status").innerText = data.status;
                 }
+            } catch (e) { 
+                console.error("Gagal polling data QR:", e); 
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", () => {
+            setInterval(loadQR, 3000);
+        });
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register("{{ asset('sw.js') }}")
+                    .then(function (registration) {
+                        console.log('SW registered:', registration.scope);
+                    })
+                    .catch(function (error) {
+                        console.log('SW failed:', error);
+                    });
             });
-    }
-
-    document.addEventListener("DOMContentLoaded", () => {
-        loadQR();
-        listenRealtimeQR();
-        setInterval(loadQR, 5000);
-    });
-</script>
-
+        }
+    </script>
 </body>
+
 </html>

@@ -121,21 +121,27 @@ class AdminDashboardController extends Controller
 
             DB::commit();
 
-            return response()->json([
+         return response()->json([
                 'success'     => true,
                 'message'     => $mqttSent ? 'Berhasil.' : 'Data tersimpan, MQTT gagal.',
                 'data'        => [
-                    'plat_nomor'   => $trx->kendaraan->plat_nomor,
-                    'total_bayar'  => (int) $totalBayar,
-                    'waktu_masuk'  => $trx->waktu_masuk,
-                    'waktu_keluar' => $trx->waktu_keluar->format('Y-m-d H:i:s'),
-                    'total_waktu'  => $durasiMenit
+                    'id'            => $trx->id,
+                    'kode_qr'       => $trx->qrParkir->kode ?? '-',
+                    'plat_nomor'    => $trx->kendaraan->plat_nomor ?? '-',
+                    'jenis'         => $trx->kendaraan->jenis ?? '-',
+                    'waktu_masuk'   => $trx->waktu_masuk,
+                    'waktu_keluar'  => $trx->waktu_keluar->format('Y-m-d H:i:s'),
+                    'total_waktu'   => $durasiMenit,
+                    'total_bayar'   => (int) $totalBayar,
+                    'petugas'       => auth()->user()->name ?? '-',
+                    'tarif_per_jam' => $trx->tarif_per_jam ?? 0,
                 ],
                 'settings'    => [
                     'app_name'      => Setting::where('key', 'app_name')->first()?->value ?? 'SMART PARKING',
                     'lokasi_parkir' => Setting::where('key', 'lokasi_parkir')->first()?->value ?? '-',
                     'alamat'        => Setting::where('key', 'alamat')->first()?->value ?? '-',
                     'kontak'        => Setting::where('key', 'kontak')->first()?->value ?? '-',
+                    'footer_note'   => Setting::where('key', 'footer_note')->first()?->value ?? 'Terima Kasih',
                 ]
             ]);
         } catch (\Exception $e) {

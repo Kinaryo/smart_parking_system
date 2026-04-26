@@ -1,5 +1,4 @@
 <?php
-
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
@@ -8,7 +7,9 @@ use App\Models\Kendaraan;
 use App\Models\Tarif;
 use App\Models\Gate;
 use App\Models\User;
+use App\Models\QRParkir;
 use Carbon\Carbon;
+use Illuminate\Support\Str; // Pastikan ini ada
 
 class ParkirTransaksiSeeder extends Seeder
 {
@@ -23,6 +24,7 @@ class ParkirTransaksiSeeder extends Seeder
             return;
         }
 
+        // 1. Buat transaksi yang dibutuhkan
         for ($i = 0; $i < 40; $i++) {
             $this->createTransaksi($kendaraans->random(), $petugasList->random(), $gateMasuk, 'selesai', true);
         }
@@ -35,13 +37,26 @@ class ParkirTransaksiSeeder extends Seeder
             $this->createTransaksi($kendaraans->random(), $petugasList->random(), $gateMasuk, 'aktif', false);
         }
 
-        $this->command->info('Seeder transaksi berhasil dijalankan.');
+        QRParkir::create([
+            'kode' => 'PKR-' . strtoupper(Str::random(6)),
+            'status' => 'tersedia',
+            'aktif' => true
+        ]);
+
+        $this->command->info('Seeder transaksi dan 1 QR Standby berhasil dibuat.');
     }
 
     private function createTransaksi($kendaraan, $petugas, $gate, $status, $isOldData)
     {
         $tarif = Tarif::where('nama', strtolower($kendaraan->jenis))->first();
-        $tarifPerJam = $tarif->tarif_per_jam ?? ($kendaraan->jenis == 'mobil' ? 5000 : 2000);
+        $tarifPerJam = $tarif->tarif_per_jam ?? 2000;
+
+        // Buat QR untuk transaksi ini (status mengikuti transaksi)
+        $qr = QRParkir::create([
+            'kode' => 'PKR-' . strtoupper(Str::random(6)),
+            'status' => ($status === 'aktif') ? 'digunakan' : 'tersedia',
+            'aktif' => true
+        ]);
 
         if ($isOldData) {
             $waktuMasuk = Carbon::now()->subDays(rand(1, 60))->subMinutes(rand(0, 1440));
@@ -66,6 +81,7 @@ class ParkirTransaksiSeeder extends Seeder
             'kendaraan_id'    => $kendaraan->id,
             'gate_masuk_id'   => $gate->id,
             'gate_keluar_id'  => $status === 'selesai' ? $gate->id : null,
+            'qr_parkir_id'    => $qr->id,
             'waktu_masuk'     => $waktuMasuk,
             'waktu_keluar'    => $waktuKeluar,
             'total_waktu'     => $durasiMenit,
